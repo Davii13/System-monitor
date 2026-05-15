@@ -78,9 +78,9 @@ python monitor.py
 
 ## 👥 Autores
 
-Desenvolvido com ❤️ por:
+Desenvolvido por:
 -   **Davi Nunes Carvalho** ([Davii13](https://github.com/Davii13))
--   **Aramuni**
+-   **João Paulo Aramuni**  ([joaopauloaramuni](https://github.com/joaopauloaramuni))
 
 ---
 
