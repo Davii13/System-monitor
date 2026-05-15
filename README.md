@@ -8,6 +8,14 @@ O **Heatcore Telemetry Pro** é um dashboard de monitoramento de sistema de alta
 
 ---
 
+## 📸 Demonstração
+
+| Dashboard Principal | Modo Widget | Conectividade |
+| :---: | :---: | :---: |
+| ![Dashboard](https://via.placeholder.com/400x225?text=Dashboard+Principal) | ![Widget](https://via.placeholder.com/400x225?text=Modo+Widget) | ![Network](https://via.placeholder.com/400x225?text=Conectividade+e+Speedtest) |
+
+---
+
 ## ✨ Funcionalidades
 
 -   📊 **Dashboard em Tempo Real**: Monitoramento de carga e performance.
