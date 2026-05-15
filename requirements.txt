@@ -1,0 +1,6 @@
+customtkinter
+psutil
+py-cpuinfo
+speedtest-cli
+py3nvml
+WMI; platform_system == "Windows"

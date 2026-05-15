@@ -2,13 +2,11 @@ import customtkinter as ctk
 import psutil
 import cpuinfo
 import platform
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from py3nvml.py3nvml import *
 import threading
 import time
+import speedtest
+from py3nvml.py3nvml import *
 
-# Importação condicional do WMI (Apenas Windows)
 IS_WINDOWS = platform.system() == "Windows"
 if IS_WINDOWS:
     try:
@@ -22,13 +20,55 @@ else:
 # DESIGN SYSTEM
 # ==========================================
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+ctk.set_default_color_theme("dark-blue")
+
+BG_COLOR = "#0a0a0c"
+CARD_BG = "#121418"
+BORDER_COLOR = "#2a2d35"
 
 ACCENT_CYAN = "#00f2ff"
-ACCENT_MAGENTA = "#ff00e5"
-BG_COLOR = "#0b0e14"
-CARD_BG = "#151921"
-BORDER_COLOR = "#232936"
+COLOR_SAFE = "#00e676"   
+COLOR_WARN = "#ffea00"   
+COLOR_DANGER = "#ff1744" 
+TEXT_GRAY = "#8a93a6"
+
+# ==========================================
+# GAUGE CUSTOMIZADO
+# ==========================================
+class TelemetryGauge(ctk.CTkCanvas):
+    def __init__(self, parent, size=240, title=""):
+        super().__init__(parent, width=size, height=size, bg=CARD_BG, highlightthickness=0)
+        self.size = size
+        self.title = title
+        self.value = 0
+        self.text_val = "0%"
+        self.draw_gauge()
+
+    def get_color(self):
+        if self.value < 60: return COLOR_SAFE
+        elif self.value < 85: return COLOR_WARN
+        else: return COLOR_DANGER
+
+    def set_value(self, value, text_val=None):
+        self.value = max(0, min(100, value))
+        self.text_val = text_val if text_val else f"{int(self.value)}%"
+        self.draw_gauge()
+
+    def draw_gauge(self):
+        self.delete("all")
+        current_color = self.get_color()
+        padding = 20
+        coord = padding, padding, self.size - padding, self.size - padding
+        
+        self.create_arc(coord, start=225, extent=-270, style="arc", outline="#1e222b", width=18)
+        
+        extent = -(270 * (self.value / 100))
+        if extent != 0:
+            self.create_arc(coord, start=225, extent=extent, style="arc", outline=current_color, width=18)
+        
+        self.create_oval(padding+12, padding+12, self.size-padding-12, self.size-padding-12, outline="#16191f", width=2)
+        self.create_text(self.size / 2, self.size / 2 - 10, text=self.text_val, fill="white", font=("Orbitron", 36, "bold"))
+        self.create_text(self.size / 2, self.size / 2 + 35, text=self.title, fill=TEXT_GRAY, font=("Rajdhani", 12, "bold"))
 
 # ==========================================
 # APP PRINCIPAL
@@ -37,279 +77,327 @@ class SystemMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("HEATCORE v2.0")
-        self.geometry("1150x800")
+        self.title("HEATCORE TELEMETRY PRO")
+        self.geometry("1280x720")
         self.configure(fg_color=BG_COLOR)
 
-        # Inicializar Hardware
         self.init_hardware()
         
-        self.cpu_history = [0] * 50
-        self.gpu_history = [0] * 50
+        self.net_history_down = [0, 0, 0]
+        self.net_history_up = [0, 0, 0]
+        self.is_widget_mode = False
 
         self.setup_ui()
         self.update_stats()
 
     def init_hardware(self):
-        print("Iniciando motores...")
-        # GPU
         try:
             nvmlInit()
             self.has_gpu = True
         except:
             self.has_gpu = False
 
-        # WMI (Apenas Windows)
         try:
-            if IS_WINDOWS and wmi:
-                self.w_obj = wmi.WMI(namespace="root\\wmi")
-            else:
-                self.w_obj = None
+            self.w_obj = wmi.WMI(namespace="root\\wmi") if (IS_WINDOWS and wmi) else None
         except:
             self.w_obj = None
 
-        # Network
         self.last_net_recv = psutil.net_io_counters().bytes_recv
         self.last_net_sent = psutil.net_io_counters().bytes_sent
         self.last_net_time = time.time()
-
-        # CPU Name
         self.cpu_name = cpuinfo.get_cpu_info().get("brand_raw", "Processador")
 
+    # ==========================================
+    # ESTRUTURA DA INTERFACE
+    # ==========================================
     def setup_ui(self):
-        # Header
-        self.header = ctk.CTkFrame(self, fg_color=CARD_BG, height=60, corner_radius=0)
-        self.header.pack(fill="x", side="top", pady=(0, 20))
+        # Container do Modo Normal (Sidebar + Conteúdo)
+        self.normal_container = ctk.CTkFrame(self, fg_color="transparent")
+        self.normal_container.pack(fill="both", expand=True)
+
+        # Container do Modo Widget (Inicia oculto)
+        self.widget_container = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=10, border_width=2, border_color=BORDER_COLOR)
         
-        self.logo_label = ctk.CTkLabel(self.header, text="🔥 HEATCORE SYSTEM MONITOR", font=("Orbitron", 18, "bold"), text_color=ACCENT_CYAN)
-        self.logo_label.pack(side="left", padx=30)
-
-        self.os_label = ctk.CTkLabel(self.header, text=f"{platform.system()} | {platform.release()}", font=("Rajdhani", 12), text_color="gray")
-        self.os_label.pack(side="right", padx=30)
-
-        # Container Principal
-        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_container.pack(fill="both", expand=True, padx=20, pady=0)
-
-        # Grid: 2 Colunas para Cards e 1 para Lateral
-        self.main_container.grid_columnconfigure((0, 1), weight=2)
-        self.main_container.grid_columnconfigure(2, weight=1)
-        self.main_container.grid_rowconfigure(0, weight=1)
-
-        # --- COLUNA 1: CPU ---
-        self.cpu_frame = self.create_card(self.main_container, 0, 0, "PROCESSADOR CENTRAL", ACCENT_CYAN)
-        self.cpu_usage_val = ctk.CTkLabel(self.cpu_frame, text="0%", font=("Orbitron", 48, "bold"), text_color=ACCENT_CYAN)
-        self.cpu_usage_val.pack(pady=(10, 0))
+        self.build_sidebar()
+        self.build_pages()
+        self.build_widget_ui()
         
-        self.cpu_subtext = ctk.CTkLabel(self.cpu_frame, text=self.cpu_name, font=("Rajdhani", 14), text_color="gray")
-        self.cpu_subtext.pack()
+        # Inicia na página Dashboard
+        self.navigate_to("dashboard")
 
-        self.cpu_metrics = ctk.CTkLabel(self.cpu_frame, text="TEMP: -- | CLOCK: --", font=("Rajdhani", 13, "bold"))
-        self.cpu_metrics.pack(pady=10)
+    def build_sidebar(self):
+        self.sidebar = ctk.CTkFrame(self.normal_container, width=220, corner_radius=0, fg_color=CARD_BG)
+        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack_propagate(False)
 
-        self.cpu_canvas = self.create_chart(self.cpu_frame, self.cpu_history, ACCENT_CYAN, "cpu")
-        self.cpu_canvas.get_tk_widget().pack(fill="both", expand=True, padx=15, pady=10)
+        # Logo
+        logo_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        logo_frame.pack(fill="x", pady=30, padx=20)
+        ctk.CTkLabel(logo_frame, text="HEATCORE", font=("Orbitron", 22, "bold"), text_color="white").pack(anchor="w")
+        ctk.CTkLabel(logo_frame, text="TELEMETRY PRO", font=("Rajdhani", 12), text_color=ACCENT_CYAN).pack(anchor="w")
 
-        # --- COLUNA 2: GPU ---
-        self.gpu_frame = self.create_card(self.main_container, 0, 1, "PLACA DE VÍDEO (GPU)", ACCENT_MAGENTA)
-        self.gpu_usage_val = ctk.CTkLabel(self.gpu_frame, text="0%", font=("Orbitron", 48, "bold"), text_color=ACCENT_MAGENTA)
-        self.gpu_usage_val.pack(pady=(10, 0))
+        # Botões de Navegação
+        self.nav_buttons = {}
+        
+        self.btn_dash = self.create_nav_button("📊  DASHBOARD", "dashboard")
+        self.btn_net = self.create_nav_button("📶  CONECTIVIDADE", "network")
+        
+        # Botão Modo Widget fica lá embaixo
+        self.btn_widget = ctk.CTkButton(self.sidebar, text="📌 MODO WIDGET", font=("Rajdhani", 14, "bold"), 
+                                        fg_color="#1e222b", text_color="white", hover_color=BORDER_COLOR, 
+                                        height=45, command=self.enable_widget_mode)
+        self.btn_widget.pack(side="bottom", fill="x", padx=20, pady=30)
 
-        self.gpu_subtext = ctk.CTkLabel(self.gpu_frame, text="GPU NVIDIA", font=("Rajdhani", 14), text_color="gray")
-        self.gpu_subtext.pack()
+    def create_nav_button(self, text, page_name):
+        btn = ctk.CTkButton(self.sidebar, text=text, font=("Rajdhani", 15, "bold"), height=50,
+                            fg_color="transparent", text_color=TEXT_GRAY, hover_color="#1a1d24", anchor="w",
+                            command=lambda: self.navigate_to(page_name))
+        btn.pack(fill="x", padx=15, pady=5)
+        self.nav_buttons[page_name] = btn
+        return btn
 
-        self.gpu_metrics = ctk.CTkLabel(self.gpu_frame, text="TEMP: -- | VRAM: --", font=("Rajdhani", 13, "bold"))
-        self.gpu_metrics.pack(pady=10)
+    def navigate_to(self, page_name):
+        # Atualiza Estado Visual do Menu (Destaque do ativo)
+        for name, btn in self.nav_buttons.items():
+            if name == page_name:
+                btn.configure(fg_color="#1e222b", text_color=ACCENT_CYAN) # Estado Ativo
+            else:
+                btn.configure(fg_color="transparent", text_color=TEXT_GRAY) # Inativo
 
-        self.gpu_canvas = self.create_chart(self.gpu_frame, self.gpu_history, ACCENT_MAGENTA, "gpu")
-        self.gpu_canvas.get_tk_widget().pack(fill="both", expand=True, padx=15, pady=10)
+        # Alterna as páginas
+        if page_name == "dashboard":
+            self.page_network.pack_forget()
+            self.page_dashboard.pack(fill="both", expand=True, padx=25, pady=25)
+        elif page_name == "network":
+            self.page_dashboard.pack_forget()
+            self.page_network.pack(fill="both", expand=True, padx=25, pady=25)
 
-        # --- COLUNA 3: LATERAL ---
-        self.side_panel = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        self.side_panel.grid(row=0, column=2, sticky="nsew", padx=(10, 0))
+    def build_pages(self):
+        self.content_area = ctk.CTkFrame(self.normal_container, fg_color="transparent")
+        self.content_area.pack(side="left", fill="both", expand=True)
 
-        # RAM Card
-        self.ram_card = self.create_side_card(self.side_panel, "MEMÓRIA RAM", "💾")
-        self.ram_usage_label = ctk.CTkLabel(self.ram_card, text="0%", font=("Orbitron", 22, "bold"))
-        self.ram_usage_label.pack()
-        self.ram_bar = ctk.CTkProgressBar(self.ram_card, progress_color=ACCENT_CYAN, height=10)
-        self.ram_bar.set(0)
-        self.ram_bar.pack(fill="x", padx=15, pady=10)
-        self.ram_details = ctk.CTkLabel(self.ram_card, text="-- / -- GB", font=("Rajdhani", 12), text_color="gray")
-        self.ram_details.pack()
+        # --- PÁGINA 1: DASHBOARD ---
+        self.page_dashboard = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.page_dashboard.grid_columnconfigure((0, 1, 2), weight=1)
+        self.page_dashboard.grid_rowconfigure(0, weight=2)
+        self.page_dashboard.grid_rowconfigure(1, weight=1)
 
-        # Net Card
-        self.net_card = self.create_side_card(self.side_panel, "REDE / WIFI", "📶")
-        self.net_down = ctk.CTkLabel(self.net_card, text="⬇ 0.00 MB/s", font=("Rajdhani", 16, "bold"), text_color=ACCENT_CYAN)
-        self.net_down.pack(pady=2)
-        self.net_up = ctk.CTkLabel(self.net_card, text="⬆ 0.00 MB/s", font=("Rajdhani", 16, "bold"), text_color=ACCENT_MAGENTA)
-        self.net_up.pack(pady=2)
+        # CPU
+        self.cpu_frame = self.create_card(self.page_dashboard, 0, 0)
+        ctk.CTkLabel(self.cpu_frame, text="CPU CORE", font=("Orbitron", 14, "bold"), text_color="white").pack(pady=(15, 0))
+        self.cpu_gauge = TelemetryGauge(self.cpu_frame, size=240, title="LOAD")
+        self.cpu_gauge.pack(pady=10, expand=True)
+        self.cpu_metrics = ctk.CTkLabel(self.cpu_frame, text="TEMP: -- | CLK: --", font=("Rajdhani", 14, "bold"), text_color="white")
+        self.cpu_metrics.pack(pady=(0, 15))
 
-        # Disk Card
-        self.disk_card = self.create_side_card(self.side_panel, "DISCO / SSD", "📀")
-        self.disk_usage = ctk.CTkLabel(self.disk_card, text="0%", font=("Orbitron", 18, "bold"))
-        self.disk_usage.pack()
-        self.disk_bar = ctk.CTkProgressBar(self.disk_card, progress_color=ACCENT_CYAN, height=8)
+        # GPU
+        self.gpu_frame = self.create_card(self.page_dashboard, 0, 1)
+        ctk.CTkLabel(self.gpu_frame, text="GPU ENGINE", font=("Orbitron", 14, "bold"), text_color="white").pack(pady=(15, 0))
+        self.gpu_gauge = TelemetryGauge(self.gpu_frame, size=240, title="LOAD")
+        self.gpu_gauge.pack(pady=10, expand=True)
+        self.gpu_metrics = ctk.CTkLabel(self.gpu_frame, text="TEMP: -- | VRAM: --", font=("Rajdhani", 14, "bold"), text_color="white")
+        self.gpu_metrics.pack(pady=(0, 15))
+
+        # RAM
+        self.ram_frame = self.create_card(self.page_dashboard, 0, 2)
+        ctk.CTkLabel(self.ram_frame, text="SYSTEM MEMORY", font=("Orbitron", 14, "bold"), text_color="white").pack(pady=(15, 0))
+        self.ram_gauge = TelemetryGauge(self.ram_frame, size=240, title="USAGE")
+        self.ram_gauge.pack(pady=10, expand=True)
+        self.ram_metrics = ctk.CTkLabel(self.ram_frame, text="USED: -- / -- GB", font=("Rajdhani", 14, "bold"), text_color="white")
+        self.ram_metrics.pack(pady=(0, 15))
+
+        # DISCO
+        self.disk_frame = self.create_card(self.page_dashboard, 1, 0, colspan=3)
+        ctk.CTkLabel(self.disk_frame, text="📀 ARMAZENAMENTO (C:)", font=("Orbitron", 12, "bold"), text_color="white").pack(anchor="nw", padx=20, pady=(15, 5))
+        self.disk_usage = ctk.CTkLabel(self.disk_frame, text="0%", font=("Orbitron", 24, "bold"), text_color="white")
+        self.disk_usage.pack(pady=(5, 0))
+        self.disk_bar = ctk.CTkProgressBar(self.disk_frame, progress_color=COLOR_SAFE, fg_color="#1e222b", height=12)
         self.disk_bar.set(0)
-        self.disk_bar.pack(fill="x", padx=15, pady=8)
+        self.disk_bar.pack(fill="x", padx=40, pady=10)
 
-        # Footer Status
-        self.footer = ctk.CTkLabel(self, text="● SISTEMA ATIVO | Intervalo: 1s", font=("Rajdhani", 11), text_color="#44dd88")
-        self.footer.pack(side="bottom", pady=10)
+        # --- PÁGINA 2: CONECTIVIDADE ---
+        self.page_network = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.page_network.grid_columnconfigure((0, 1), weight=1)
+        self.page_network.grid_rowconfigure(0, weight=1)
 
-    def create_card(self, parent, row, col, title, accent):
-        frame = ctk.CTkFrame(parent, fg_color=CARD_BG, corner_radius=20, border_width=1, border_color=BORDER_COLOR)
-        frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
-        
-        lbl = ctk.CTkLabel(frame, text=title, font=("Orbitron", 11, "bold"), text_color="gray")
-        lbl.pack(anchor="nw", padx=20, pady=15)
-        
-        # Linha decorativa
-        line = ctk.CTkFrame(frame, fg_color=accent, height=2, width=40)
-        line.pack(anchor="nw", padx=20)
-        
-        return frame
+        # Rede Ao Vivo
+        self.net_live_frame = self.create_card(self.page_network, 0, 0)
+        ctk.CTkLabel(self.net_live_frame, text="📶 TRÁFEGO AO VIVO", font=("Orbitron", 16, "bold"), text_color="white").pack(pady=30)
+        self.net_down_mbps = ctk.CTkLabel(self.net_live_frame, text="⬇ 0.00 Mbps", font=("Orbitron", 40, "bold"), text_color=COLOR_SAFE)
+        self.net_down_mbps.pack(pady=20)
+        self.net_up_mbps = ctk.CTkLabel(self.net_live_frame, text="⬆ 0.00 Mbps", font=("Orbitron", 40, "bold"), text_color="#00b0ff")
+        self.net_up_mbps.pack(pady=20)
 
-    def create_side_card(self, parent, title, icon):
+        # Speedtest
+        self.net_st_frame = self.create_card(self.page_network, 0, 1)
+        ctk.CTkLabel(self.net_st_frame, text="🚀 SPEEDTEST OFICIAL", font=("Orbitron", 16, "bold"), text_color="white").pack(pady=30)
+        self.btn_speedtest = ctk.CTkButton(self.net_st_frame, text="INICIAR TESTE MÁXIMO", font=("Rajdhani", 16, "bold"), height=50, fg_color=BORDER_COLOR, hover_color="#3a3d45", command=self.start_speedtest)
+        self.btn_speedtest.pack(pady=20)
+        self.lbl_st_results = ctk.CTkLabel(self.net_st_frame, text="Teste não realizado.", font=("Rajdhani", 16), text_color=TEXT_GRAY)
+        self.lbl_st_results.pack(pady=20)
+
+    def create_card(self, parent, row, col, colspan=1):
         frame = ctk.CTkFrame(parent, fg_color=CARD_BG, corner_radius=15, border_width=1, border_color=BORDER_COLOR)
-        frame.pack(fill="x", pady=(0, 15))
-        
-        title_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        title_frame.pack(fill="x", padx=15, pady=10)
-        
-        ctk.CTkLabel(title_frame, text=icon, font=("Rajdhani", 16)).pack(side="left")
-        ctk.CTkLabel(title_frame, text=title, font=("Orbitron", 10, "bold"), text_color="gray").pack(side="left", padx=10)
-        
+        frame.grid(row=row, column=col, columnspan=colspan, padx=10, pady=10, sticky="nsew")
         return frame
 
-    def create_chart(self, parent, data, color, chart_type):
-        fig, ax = plt.subplots(figsize=(5, 3), dpi=90)
-        fig.patch.set_facecolor(CARD_BG)
-        ax.set_facecolor(CARD_BG)
+    # ==========================================
+    # LÓGICA DO MODO WIDGET
+    # ==========================================
+    def build_widget_ui(self):
+        # Barra de arrastar superior
+        self.drag_bar = ctk.CTkFrame(self.widget_container, height=25, fg_color="#1e222b", corner_radius=10)
+        self.drag_bar.pack(fill="x", side="top")
         
-        line, = ax.plot(data, color=color, linewidth=2.5)
-        fill = ax.fill_between(range(len(data)), data, color=color, alpha=0.15)
+        # Eventos para arrastar a janela sem bordas
+        self.drag_bar.bind("<ButtonPress-1>", self.start_move)
+        self.drag_bar.bind("<B1-Motion>", self.do_move)
         
-        ax.set_ylim(0, 105)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        for spine in ax.spines.values():
-            spine.set_visible(False)
+        ctk.CTkLabel(self.drag_bar, text="HEATCORE", font=("Orbitron", 10, "bold")).pack(side="left", padx=10)
         
-        canvas = FigureCanvasTkAgg(fig, master=parent)
-        canvas.draw()
-        
-        if chart_type == "cpu":
-            self.cpu_line = line
-            self.cpu_fill = fill
-            self.cpu_canvas = canvas
-            self.cpu_ax = ax
-        else:
-            self.gpu_line = line
-            self.gpu_fill = fill
-            self.gpu_canvas = canvas
-            self.gpu_ax = ax
-            
-        return canvas
+        # Botão para voltar ao normal
+        btn_close_widget = ctk.CTkButton(self.drag_bar, text="⛶", width=25, height=20, fg_color="transparent", hover_color=BORDER_COLOR, command=self.disable_widget_mode)
+        btn_close_widget.pack(side="right", padx=5)
 
+        # Conteúdo do Widget
+        content = ctk.CTkFrame(self.widget_container, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        self.wdg_cpu = ctk.CTkLabel(content, text="CPU: 0%", font=("Orbitron", 14, "bold"), text_color=COLOR_SAFE)
+        self.wdg_cpu.pack(side="left", expand=True)
+        self.wdg_gpu = ctk.CTkLabel(content, text="GPU: 0%", font=("Orbitron", 14, "bold"), text_color=COLOR_WARN)
+        self.wdg_gpu.pack(side="left", expand=True)
+        self.wdg_ram = ctk.CTkLabel(content, text="RAM: 0%", font=("Orbitron", 14, "bold"), text_color=ACCENT_CYAN)
+        self.wdg_ram.pack(side="left", expand=True)
+
+    def enable_widget_mode(self):
+        self.is_widget_mode = True
+        self.normal_container.pack_forget()
+        self.widget_container.pack(fill="both", expand=True)
+        
+        self.overrideredirect(True) # Remove bordas do SO
+        self.attributes("-topmost", True) # Trava por cima de tudo
+        self.geometry("320x80") # Fica pequeno
+
+    def disable_widget_mode(self):
+        self.is_widget_mode = False
+        self.widget_container.pack_forget()
+        self.normal_container.pack(fill="both", expand=True)
+        
+        self.overrideredirect(False)
+        self.attributes("-topmost", False)
+        self.geometry("1280x720")
+
+    # Funções para mover a janela no modo Widget
+    def start_move(self, event):
+        self.x = event.x
+        self.y = event.y
+
+    def do_move(self, event):
+        deltax = event.x - self.x
+        deltay = event.y - self.y
+        x = self.winfo_x() + deltax
+        y = self.winfo_y() + deltay
+        self.geometry(f"+{x}+{y}")
+
+    # ==========================================
+    # COLETA DE DADOS (Mantida e otimizada)
+    # ==========================================
     def get_cpu_temp(self):
         try:
-            # 1. Psutil (Busca em todos os sensores disponíveis)
             t = psutil.sensors_temperatures()
             if t:
                 for name, entries in t.items():
                     for entry in entries:
-                        if entry.current and entry.current > 0:
-                            return f"{entry.current:.0f}°C"
-            
-            # 2. Específico Windows (WMI/PowerShell)
+                        if entry.current and entry.current > 0: return f"{entry.current:.0f}°C"
             if IS_WINDOWS:
-                if self.w_obj:
-                    res = self.w_obj.MSAcpi_ThermalZoneTemperature()
-                    if res: return f"{(res[0].CurrentTemperature - 2732) / 10:.0f}°C"
-                
                 import subprocess
                 cmd = "Get-CimInstance -Namespace root/wmi -ClassName MsAcpi_ThermalZoneTemperature | Select-Object -ExpandProperty CurrentTemperature"
-                
-                # Só usar CREATE_NO_WINDOW no Windows
-                kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
-                
-                proc = subprocess.Popen(["powershell", "-Command", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
+                proc = subprocess.Popen(["powershell", "-Command", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
                 out, _ = proc.communicate(timeout=0.5)
                 if out.strip(): return f"{(int(out.strip()) - 2732) / 10:.0f}°C"
-
-            # 3. Específico macOS (Requer osx-cpu-temp instalado via brew)
-            elif platform.system() == "Darwin":
-                import subprocess
-                try:
-                    out = subprocess.check_output(["osx-cpu-temp"], text=True)
-                    if out: return out.strip()
-                except: pass
-        except:
-            pass
+        except: pass
         return "N/A"
 
+    def start_speedtest(self):
+        self.btn_speedtest.configure(state="disabled", text="TESTANDO...")
+        self.lbl_st_results.configure(text="Conectando... Aguarde cerca de 15s.")
+        threading.Thread(target=self._run_speedtest_thread, daemon=True).start()
+
+    def _run_speedtest_thread(self):
+        try:
+            st = speedtest.Speedtest()
+            st.get_best_server()
+            down_max = st.download() / 1_000_000
+            up_max = st.upload() / 1_000_000
+            ping = st.results.ping
+            self.lbl_st_results.configure(text=f"PING: {ping:.0f} ms | DOWN: {down_max:.1f} Mbps | UP: {up_max:.1f} Mbps", text_color=COLOR_SAFE)
+        except Exception:
+            self.lbl_st_results.configure(text="Falha. Verifique a rede.", text_color=COLOR_DANGER)
+        finally:
+            self.btn_speedtest.configure(state="normal", text="REFAZER TESTE")
+
     def update_stats(self):
-        # --- CPU ---
+        # Coleta
         cpu_usage = psutil.cpu_percent()
         cpu_freq = psutil.cpu_freq()
         temp = self.get_cpu_temp()
+        m = psutil.virtual_memory()
         
-        self.cpu_usage_val.configure(text=f"{cpu_usage}%")
-        self.cpu_metrics.configure(text=f"TEMP: {temp} | CLOCK: {cpu_freq.current:.0f} MHz" if cpu_freq else f"TEMP: {temp}")
-        
-        self.cpu_history.append(cpu_usage)
-        self.cpu_history.pop(0)
-        self.cpu_line.set_ydata(self.cpu_history)
-        self.cpu_canvas.draw_idle()
-
-        # --- GPU ---
+        gpu_usage = 0
         if self.has_gpu:
             try:
                 h = nvmlDeviceGetHandleByIndex(0)
-                name = nvmlDeviceGetName(h)
-                if isinstance(name, bytes): name = name.decode()
-                util = nvmlDeviceGetUtilizationRates(h)
+                gpu_usage = nvmlDeviceGetUtilizationRates(h).gpu
                 mem = nvmlDeviceGetMemoryInfo(h)
                 gtmp = nvmlDeviceGetTemperature(h, NVML_TEMPERATURE_GPU)
-                
-                self.gpu_usage_val.configure(text=f"{util.gpu}%")
-                self.gpu_subtext.configure(text=name)
+            except: pass
+
+        # Atualiza UI (Modo Normal)
+        if not self.is_widget_mode:
+            self.cpu_gauge.set_value(cpu_usage)
+            self.cpu_metrics.configure(text=f"TEMP: {temp} | CLK: {cpu_freq.current:.0f} MHz" if cpu_freq else f"TEMP: {temp}")
+            
+            if self.has_gpu:
+                self.gpu_gauge.set_value(gpu_usage)
                 self.gpu_metrics.configure(text=f"TEMP: {gtmp}°C | VRAM: {mem.used//1024**2}/{mem.total//1024**2} MB")
-                self.gpu_history.append(util.gpu)
-            except:
-                self.gpu_history.append(0)
+                
+            self.ram_gauge.set_value(m.percent)
+            self.ram_metrics.configure(text=f"USED: {m.used/1024**3:.1f} / {m.total/1024**3:.1f} GB")
+
+            d = psutil.disk_usage("/")
+            self.disk_usage.configure(text=f"{d.percent}%")
+            self.disk_bar.set(d.percent / 100)
+
+            # Rede
+            net_io = psutil.net_io_counters()
+            now = time.time()
+            dt = now - self.last_net_time
+            if dt > 0:
+                raw_down_bps = max(0, (net_io.bytes_recv - self.last_net_recv) / dt)
+                raw_up_bps = max(0, (net_io.bytes_sent - self.last_net_sent) / dt)
+                
+                self.net_history_down.append(raw_down_bps)
+                self.net_history_up.append(raw_up_bps)
+                if len(self.net_history_down) > 4: self.net_history_down.pop(0)
+                if len(self.net_history_up) > 4: self.net_history_up.pop(0)
+
+                avg_down_bps = sum(self.net_history_down) / len(self.net_history_down)
+                avg_up_bps = sum(self.net_history_up) / len(self.net_history_up)
+
+                self.net_down_mbps.configure(text=f"⬇ {(avg_down_bps * 8) / 1_000_000:.1f} Mbps")
+                self.net_up_mbps.configure(text=f"⬆ {(avg_up_bps * 8) / 1_000_000:.1f} Mbps")
+                
+                self.last_net_recv = net_io.bytes_recv
+                self.last_net_sent = net_io.bytes_sent
+                self.last_net_time = now
+
+        # Atualiza UI (Modo Widget)
         else:
-            self.gpu_history.append(0)
+            self.wdg_cpu.configure(text=f"CPU: {cpu_usage:.0f}%", text_color=COLOR_DANGER if cpu_usage > 85 else COLOR_SAFE)
+            self.wdg_gpu.configure(text=f"GPU: {gpu_usage:.0f}%", text_color=COLOR_DANGER if gpu_usage > 85 else COLOR_WARN)
+            self.wdg_ram.configure(text=f"RAM: {m.percent:.0f}%", text_color=COLOR_DANGER if m.percent > 90 else ACCENT_CYAN)
 
-        self.gpu_history.pop(0)
-        self.gpu_line.set_ydata(self.gpu_history)
-        self.gpu_canvas.draw_idle()
-
-        # --- RAM ---
-        m = psutil.virtual_memory()
-        self.ram_usage_label.configure(text=f"{m.percent}%")
-        self.ram_bar.set(m.percent / 100)
-        self.ram_details.configure(text=f"{m.used/1024**3:.1f} / {m.total/1024**3:.1f} GB")
-
-        # --- DISK ---
-        d = psutil.disk_usage("/")
-        self.disk_usage.configure(text=f"{d.percent}%")
-        self.disk_bar.set(d.percent / 100)
-
-        # --- NET ---
-        net_io = psutil.net_io_counters()
-        now = time.time()
-        dt = now - self.last_net_time
-        down = (net_io.bytes_recv - self.last_net_recv) / (1024 * 1024 * dt)
-        up = (net_io.bytes_sent - self.last_net_sent) / (1024 * 1024 * dt)
-        
-        self.net_down.configure(text=f"⬇ {down:.2f} MB/s")
-        self.net_up.configure(text=f"⬆ {up:.2f} MB/s")
-        
-        self.last_net_recv, self.last_net_sent, self.last_net_time = net_io.bytes_recv, net_io.bytes_sent, now
-
-        # Loop
         self.after(1000, self.update_stats)
 
 if __name__ == "__main__":
