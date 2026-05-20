@@ -6,6 +6,17 @@ import threading
 import time
 import speedtest
 from py3nvml.py3nvml import *
+import psutil
+import platform
+import os
+import clr
+_DLL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "dll",
+    "LibreHardwareMonitorLib.dll"
+)
+clr.AddReference(_DLL_PATH)
+from LibreHardwareMonitor.Hardware import Computer
 
 IS_WINDOWS = platform.system() == "Windows"
 if IS_WINDOWS:
@@ -182,13 +193,33 @@ class SystemMonitorApp(ctk.CTk):
         self.page_dashboard.grid_rowconfigure(0, weight=2)
         self.page_dashboard.grid_rowconfigure(1, weight=1)
 
-        # CPU
+        
+       # CPU
+
         self.cpu_frame = self.create_card(self.page_dashboard, 0, 0)
+
         ctk.CTkLabel(self.cpu_frame, text="CPU CORE", font=("Orbitron", 14, "bold"), text_color="white").pack(pady=(15, 0))
+
         self.cpu_gauge = TelemetryGauge(self.cpu_frame, size=240, title="LOAD")
+
         self.cpu_gauge.pack(pady=10, expand=True)
-        self.cpu_metrics = ctk.CTkLabel(self.cpu_frame, text="TEMP: -- | CLK: --", font=("Rajdhani", 14, "bold"), text_color="white")
+
+        self.cpu_temp_label = ctk.CTkLabel(self.cpu_frame, text="🌡 --°C",
+
+                                            font=("Orbitron", 22, "bold"),
+
+                                            text_color=COLOR_SAFE)
+
+        self.cpu_temp_label.pack(pady=(0, 2))
+
+        self.cpu_metrics = ctk.CTkLabel(self.cpu_frame, text="CLK: -- MHz",
+
+                                         font=("Rajdhani", 13),
+
+                                         text_color=TEXT_GRAY)
+
         self.cpu_metrics.pack(pady=(0, 15))
+ 
 
         # GPU
         self.gpu_frame = self.create_card(self.page_dashboard, 0, 1)
@@ -304,21 +335,64 @@ class SystemMonitorApp(ctk.CTk):
     # COLETA DE DADOS (Mantida e otimizada)
     # ==========================================
     def get_cpu_temp(self):
-        try:
-            t = psutil.sensors_temperatures()
-            if t:
-                for name, entries in t.items():
-                    for entry in entries:
-                        if entry.current and entry.current > 0: return f"{entry.current:.0f}°C"
-            if IS_WINDOWS:
-                import subprocess
-                cmd = "Get-CimInstance -Namespace root/wmi -ClassName MsAcpi_ThermalZoneTemperature | Select-Object -ExpandProperty CurrentTemperature"
-                proc = subprocess.Popen(["powershell", "-Command", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                out, _ = proc.communicate(timeout=0.5)
-                if out.strip(): return f"{(int(out.strip()) - 2732) / 10:.0f}°C"
-        except: pass
-        return "N/A"
 
+        try:
+
+            if not hasattr(self, "_lhm_computer"):
+
+                print("[DEBUG] Inicializando LHM Computer...")
+
+                self._lhm_computer = Computer()
+
+                self._lhm_computer.IsCpuEnabled = True
+
+                self._lhm_computer.Open()
+
+                print("[DEBUG] LHM Computer aberto.")
+    
+            for hw in self._lhm_computer.Hardware:
+
+                print(f"[DEBUG] Hardware encontrado: {hw.HardwareType} - {hw.Name}")
+
+                if "Cpu" not in str(hw.HardwareType):
+
+                    continue
+
+                hw.Update()
+
+                print(f"[DEBUG] Sensores da CPU:")
+
+                for s in hw.Sensors:
+
+                    print(f"  - [{s.SensorType}] {s.Name} = {s.Value}")
+
+                temps = [
+
+                    float(s.Value) for s in hw.Sensors
+
+                    if str(s.SensorType) == "Temperature" and s.Value is not None
+
+                ]
+
+                if temps:
+
+                    result = f"{max(temps):.0f}°C"
+
+                    print(f"[DEBUG] Retornando: {result}")
+
+                    return result
+
+                else:
+
+                    print("[DEBUG] Nenhum sensor de temperatura com valor!")
+
+        except Exception as e:
+
+            print(f"[DEBUG] EXCEÇÃO: {type(e).__name__}: {e}")
+
+        return "N/A"
+ 
+    
     def start_speedtest(self):
         self.btn_speedtest.configure(state="disabled", text="TESTANDO...")
         self.lbl_st_results.configure(text="Conectando... Aguarde cerca de 15s.")
@@ -356,7 +430,19 @@ class SystemMonitorApp(ctk.CTk):
         # Atualiza UI (Modo Normal)
         if not self.is_widget_mode:
             self.cpu_gauge.set_value(cpu_usage)
-            self.cpu_metrics.configure(text=f"TEMP: {temp} | CLK: {cpu_freq.current:.0f} MHz" if cpu_freq else f"TEMP: {temp}")
+            # Temperatura com cor dinâmica
+            temp_color = COLOR_SAFE
+            if temp != "N/A":
+                try:
+                    tv = int(temp.replace("°C", ""))
+                    if tv >= 80: temp_color = COLOR_DANGER
+                    elif tv >= 65: temp_color = COLOR_WARN
+                except ValueError:
+                    pass
+            self.cpu_temp_label.configure(text=f"🌡 {temp}", text_color=temp_color)
+            self.cpu_metrics.configure(
+                text=f"CLK: {cpu_freq.current:.0f} MHz" if cpu_freq else "CLK: --"
+            )
             
             if self.has_gpu:
                 self.gpu_gauge.set_value(gpu_usage)
