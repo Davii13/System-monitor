@@ -39,6 +39,39 @@ O **Heatcore Telemetry Pro** é um dashboard de monitoramento de sistema de alta
 -   **Speedtest-cli**: Integração de testes de velocidade.
 -   **Py3nvml**: Monitoramento de GPUs NVIDIA.
 -   **WMI**: Integração avançada com sensores Windows.
+-   **Pythonnet (clr)**: Biblioteca de ponte para carregar código .NET/C# no Python.
+
+---
+
+## 🌡️ Monitoramento de Temperatura & DLLs
+
+Para extrair com precisão a temperatura do processador (CPU) no Windows, este projeto utiliza a biblioteca oficial do **[LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)**. Como o Python não possui acesso nativo de baixo nível a esses sensores diretamente no Windows, a integração é feita através de DLLs compiladas em C# (.NET) importadas dinamicamente.
+
+### 📁 Estrutura da pasta `dll/`
+
+No diretório `dll/` do projeto, você encontrará os seguintes arquivos:
+
+1. **`LibreHardwareMonitorLib.dll`**: É a biblioteca principal do LibreHardwareMonitor. Ela contém toda a lógica de detecção de hardware, controle de drivers em nível de kernel (Ring 0) e leitura de sensores de temperatura, carga e clock.
+2. **`System.Memory.dll`**: Uma dependência do .NET necessária para manipulação eficiente de buffers e memória pelo LibreHardwareMonitor.
+3. **`System.Runtime.CompilerServices.Unsafe.dll`**: Uma biblioteca de suporte necessária para operações de ponteiro e código "unsafe" (não seguro) usadas nas chamadas de baixo nível dos drivers.
+
+### 📥 Download e Atualização das DLLs
+
+As DLLs utilizadas neste projeto foram extraídas da versão oficial do LibreHardwareMonitor. Se você deseja atualizá-las ou baixá-las manualmente, siga os passos abaixo:
+
+1. Acesse a página oficial de lançamentos: **[LibreHardwareMonitor Releases](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases)**.
+2. Baixe o arquivo `.zip` da versão estável mais recente (ex: `LibreHardwareMonitor.zip`).
+3. Extraia o conteúdo e copie os arquivos `LibreHardwareMonitorLib.dll`, `System.Memory.dll` e `System.Runtime.CompilerServices.Unsafe.dll` para a pasta `dll/` do projeto.
+
+### ⚠️ Importante: Permissões de Administrador
+
+Para que o LibreHardwareMonitor consiga inicializar o driver de kernel necessário para ler os sensores de temperatura da CPU, **o script Python deve ser executado com privilégios de Administrador**. 
+
+* Se você executar como usuário comum, a temperatura da CPU será exibida como **N/A** (Não Disponível).
+* **Como rodar como Administrador:** Abra o Prompt de Comando (cmd) ou PowerShell como Administrador e execute:
+  ```bash
+  python monitor.py
+  ```
 
 ---
 
